@@ -1,0 +1,838 @@
+import myFunctions
+from myFunctions import *
+import streamlit as st
+import xgboost as xgb
+import scipy.stats as stats
+import seaborn as sns
+from scipy.stats import chi2_contingency
+from sklearn.preprocessing import RobustScaler, LabelEncoder
+from catboost import CatBoostClassifier
+from sklearn.metrics import accuracy_score, classification_report, precision_recall_fscore_support
+import numpy as np
+import lightgbm as lgb
+from sklearn.linear_model import LogisticRegression
+from sklearn.preprocessing import StandardScaler
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import train_test_split
+from io import StringIO
+
+
+def check_data(dataframe):
+    # Capture dataframe.info() output as a string
+    buffer = StringIO()
+    dataframe.info(buf=buffer)
+    info_string = buffer.getvalue()
+
+    # Display the captured string using st.text
+    st.write("### Dataframe Information:")
+    st.text(info_string)
+
+    # The rest remains unchanged
+    st.write("### Dataframe Shape:")
+    st.write(dataframe.shape)
+
+    st.write("### Missing Values:")
+    st.write(dataframe.isnull().sum())
+
+    st.write("### Describe Data:")
+    st.write(dataframe.describe().transpose())
+
+    st.write("### First Few Rows of Data:")
+    st.write(dataframe.head())
+
+def grab_col_names(dataframe, cat_th=10, car_th=20):
+    cat_cols = [col for col in dataframe.columns if dataframe[col].dtypes == "O"]
+    num_but_cat = [col for col in dataframe.columns if dataframe[col].nunique() < cat_th and dataframe[col].dtypes != "O"]
+    cat_but_car = [col for col in dataframe.columns if dataframe[col].nunique() > cat_th and dataframe[col].dtypes == "O"]
+    cat_cols = cat_cols + num_but_cat
+    cat_cols = [col for col in cat_cols if col not in cat_but_car]
+
+    num_cols = [col for col in dataframe.columns if dataframe[col].dtypes != "O"]
+    num_cols = [col for col in num_cols if col not in num_but_cat]
+
+    return cat_cols, num_cols, cat_but_car
+
+# Title of your app
+st.title('Data Analysis on Adult Income Dataset')
+
+# Correcting column names in the dataset
+column_names = [
+    "age", "workclass", "fnlwgt", "education", "education-num", "marital-status",
+    "occupation", "relationship", "race", "sex", "capital-gain", "capital-loss",
+    "hours-per-week", "native-country", "income"
+]
+
+# Reading the dataset directly
+df = pd.read_csv("adult.data", names=column_names, na_values=" ?", skipinitialspace=True)
+df.replace('?', np.nan, inplace=True)
+
+# Displaying initial data check
+st.write("Previewing the dataset:")
+check_data(df)
+
+# Display unique values count for deciding on thresholds
+unique_counts = {col: df[col].nunique() for col in df.columns}
+st.write("Unique observations for each column:", unique_counts)
+
+# Drop 'education' as it's redundant with 'education-num'
+df = df.drop('education', axis=1)
+
+# Define categorical and numerical columns
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20, 30)
+
+# Optionally display the column categorization
+st.write(f"Categorical columns: {cat_cols}")
+st.write(f"Numerical columns: {num_cols}")
+st.write(f"Categorical but cardinal: {cat_but_car}")
+
+# Assuming df, num_cols are defined from the previous step
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+# Section header
+st.header("Analyzing Numerical Columns")
+
+# Display descriptive statistics for numerical columns
+if st.checkbox("Show Descriptive Statistics for Numerical Columns"):
+    selected_num_col = st.selectbox("Select a Numerical Column to Describe", num_cols)
+    st.write(df[selected_num_col].describe())
+
+# Histograms for selected numerical column
+if st.checkbox("Show Histogram for a Numerical Column"):
+    selected_hist_col = st.selectbox("Select a Numerical Column for Histogram", num_cols)
+    fig, ax = plt.subplots()
+    sns.histplot(df[selected_hist_col], kde=True, ax=ax)
+    plt.title(f'Distribution of {selected_hist_col}')
+    st.pyplot(fig)
+
+# Pair plots for numerical columns (this can be resource-intensive, so make it optional)
+if st.checkbox("Show Pair Plots for Numerical Columns (May be slow)"):
+    st.write("Generating pair plots...")
+    sns.pairplot(df[num_cols])
+    st.pyplot()
+
+# Correlation matrix
+if st.checkbox("Show Correlation Matrix for Numerical Columns"):
+    corr = df[num_cols].corr()
+    mask = np.triu(np.ones_like(corr, dtype=bool))
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(corr, mask=mask, cmap='coolwarm', vmax=.3, center=0, square=True, linewidths=.5, cbar_kws={"shrink": .5}, annot=True)
+    st.pyplot(fig)
+
+# Box plots for each numerical column
+if st.checkbox("Show Box Plots for Numerical Columns"):
+    selected_box_col = st.selectbox("Select a Numerical Column for Box Plot", num_cols)
+    fig, ax = plt.subplots()
+    sns.boxplot(x=df[selected_box_col])
+    plt.title(f'Box Plot of {selected_box_col}')
+    st.pyplot(fig)
+
+# KDE plots for each numerical column by income
+if st.checkbox("Show KDE Plots for Numerical Columns by Income"):
+    selected_kde_col = st.selectbox("Select a Numerical Column for KDE Plot", num_cols)
+    fig, ax = plt.subplots()
+    sns.kdeplot(data=df, x=selected_kde_col, hue="income", shade=True, ax=ax)
+    plt.title(f'Density Plot of {selected_kde_col} by Income')
+    st.pyplot(fig)
+
+# Q-Q plots for each numerical column
+if st.checkbox("Show Q-Q Plots for Numerical Columns"):
+    selected_qq_col = st.selectbox("Select a Numerical Column for Q-Q Plot", num_cols)
+    fig, ax = plt.subplots()
+    stats.probplot(df[selected_qq_col].dropna(), dist="norm", plot=ax)
+    plt.title(f'Q-Q Plot of {selected_qq_col}')
+    st.pyplot(fig)
+
+# Assuming df, cat_cols are defined from the previous steps
+
+# Function to plot bar charts for categorical columns
+def cat_summary(dataframe, col_name):
+    counts = dataframe[col_name].value_counts()
+    fig, ax = plt.subplots()
+    counts.plot(kind='bar', ax=ax)
+    ax.set_title(f'Distribution of {col_name}')
+    st.pyplot(fig)
+
+# Function to show income ratio for categorical columns
+def income_ratio_by_category(dataframe, column):
+    counts = dataframe.groupby([column, 'income']).size().unstack()
+    ratios = counts.div(counts.sum(axis=1), axis=0)
+    st.write(ratios)
+
+# Function to calculate and show Cramér's V
+def cramers_v(x, y):
+    confusion_matrix = pd.crosstab(x, y)
+    chi2 = chi2_contingency(confusion_matrix)[0]
+    n = confusion_matrix.sum().sum()
+    phi2 = chi2 / n
+    r, k = confusion_matrix.shape
+    phi2corr = max(0, phi2 - ((k-1)*(r-1))/(n-1))
+    r_corr = r - ((r-1)**2)/(n-1)
+    k_corr = k - ((k-1)**2)/(n-1)
+    return np.sqrt(phi2corr / min((k_corr-1), (r_corr-1)))
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+# Analyzing categorical columns
+st.header("Analyzing Categorical Columns")
+
+# Display bar plots for each categorical column
+if st.checkbox("Show Bar Plots for Categorical Columns"):
+    selected_cat_col = st.selectbox("Select Categorical Column", cat_cols)
+    cat_summary(df, selected_cat_col)
+
+# Display income ratio for each categorical column
+if st.checkbox("Show Income Ratio by Category"):
+    selected_ratio_col = st.selectbox("Select Categorical Column for Income Ratio", cat_cols)
+    income_ratio_by_category(df, selected_ratio_col)
+
+# Stacked bar plots for visualizing income by categories
+if st.checkbox("Show Stacked Bar Plots for Income by Category"):
+    for col in cat_cols:
+        counts = pd.crosstab(df[col], df['income'])
+        counts.plot(kind='bar', stacked=True, figsize=(10, 5))
+        plt.title(f'{col} by Income')
+        plt.xlabel(col)
+        plt.ylabel('Frequency')
+        st.pyplot(plt.gcf())
+cat_columns = df.select_dtypes(include=['object', 'category']).columns
+# Cramér's V correlation matrix
+if st.checkbox("Show Cramér's V Matrix for Categorical Variables"):
+    cat_columns = df.select_dtypes(include=['object', 'category']).columns
+    cramers_v_matrix = pd.DataFrame(np.zeros((len(cat_columns), len(cat_columns))), index=cat_columns, columns=cat_columns)
+    for col1 in cat_columns:
+        for col2 in cat_columns:
+            cramers_v_matrix.loc[col1, col2] = cramers_v(df[col1], df[col2])
+    fig, ax = plt.subplots(figsize=(10, 8))
+    sns.heatmap(cramers_v_matrix, annot=True, fmt=".2f", cmap="coolwarm")
+    plt.title("Cramér's V Matrix of Categorical Variables")
+    st.pyplot(fig)
+
+# Significance of categorical variables to the target 'income'
+if st.checkbox("Show Significance of Categorical Variables to Income"):
+    significance_data = {}
+    for col in cat_cols:
+        table = pd.crosstab(df[col], df['income'])
+        chi2, p, dof, expected = chi2_contingency(table)
+        significance_data[col] = p
+    st.write(significance_data)
+
+# Assuming df, cat_cols, num_cols are already defined
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+
+st.header("Data Preprocessing")
+
+
+
+# Handling outliers of 'age'
+
+# Calculating the number of outliers for 'age' variable
+Q1 = df['age'].quantile(0.25)
+Q3 = df['age'].quantile(0.75)
+IQR = Q3 - Q1
+lower_bound = Q1 - 1.5 * IQR
+upper_bound = Q3 + 1.5 * IQR
+outliers = df[(df['age'] < lower_bound) | (df['age'] > upper_bound)]
+number_of_outliers = outliers.shape[0]
+print(f"Number of outliers in 'age': {number_of_outliers}")
+print(f"Outliers range: below {lower_bound} and above {upper_bound}")
+
+# Replacing them with threshold due to low in number and having no crucial effect
+replace_with_thresholds(df, 'age')
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+# Handling outliers for 'age'
+st.header("Outliers Handling for 'Age'")
+replace_with_thresholds(df, 'age')
+fig, ax = plt.subplots()
+sns.boxplot(x=df['age'], ax=ax)
+st.pyplot(fig)
+
+
+# Handling outliers of hours-per-week
+
+# Calculate Q1, Q3, and IQR and so the bounds
+Q1 = df['hours-per-week'].quantile(0.25)
+Q3 = df['hours-per-week'].quantile(0.75)
+IQR = Q3 - Q1
+
+lower_bound = Q1 - 1.5 * IQR
+upper_bound = Q3 + 1.5 * IQR
+
+
+# Segmenting the variable
+df['hours_segment'] = pd.cut(df['hours-per-week'],
+                             bins=[-np.inf, lower_bound, upper_bound, np.inf],
+                             labels=['Lower than Min Threshold', 'Between Thresholds', 'Higher than Max Threshold'])
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+# Handling outliers for 'hours-per-week'
+st.header("Outliers Handling for 'Hours-Per-Week'")
+replace_with_thresholds(df, 'hours-per-week')
+fig, ax = plt.subplots()
+sns.boxplot(x=df['hours-per-week'], ax=ax)
+st.pyplot(fig)
+
+# Handling outliers of capital-gain and capital-loss
+
+# Converting them into binary within and so outliers are also eliminated
+df['has_capital_gain'] = (df['capital-gain'] > 0).astype(int)
+df['has_capital_loss'] = (df['capital-loss'] > 0).astype(int)
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+# Binary conversion for 'capital-gain' and 'capital-loss'
+st.header("Binary Conversion for 'Capital-Gain' and 'Capital-Loss'")
+
+df['has_capital_gain'] = (df['capital-gain'] > 0).astype(int)
+df['has_capital_loss'] = (df['capital-loss'] > 0).astype(int)
+st.write("First 5 Rows After Conversion:", df[['capital-gain', 'has_capital_gain', 'capital-loss', 'has_capital_loss']].head(10))
+
+
+
+# Eliminating fnlwgt
+
+# Dropping 'fnlwgt' column
+st.header("Dropping 'fnlwgt'")
+st.write('fnlwgt is just dropped')
+df = df.drop('fnlwgt', axis=1)
+
+
+# Since fnlwgt has no importance and affect the models badly, it is dropped.
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+# Filling native-country as US if race is white
+
+# Checking the number of 'White' people having 'United-States' as their native country
+white_us = df[(df['race'] == 'White') & (df['native-country'] == 'United-States')]
+print(f'Number of individuals who are White and from United-States: {white_us.shape[0]}')
+
+
+# Filtering for rows where 'native-country' is NaN and 'race' is 'White'
+nan_native_country_white = df[(df['native-country'].isnull()) & (df['race'] == 'White')]
+print(f'Number of individuals who are White and have NaN in the native-country column: {nan_native_country_white.shape[0]}')
+
+
+# Filling NaN values in 'native-country' with 'United-States'
+df['native-country'] = df['native-country'].fillna('United-States')
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+
+
+# Filling occupation with its mode based on male and female
+
+most_common_occupation_male = df[df['sex'] == 'Male']['occupation'].mode()[0]
+most_common_occupation_female = df[df['sex'] == 'Female']['occupation'].mode()[0]
+
+
+# Fill NaN values in 'occupation' based on 'sex'
+df.loc[(df['sex'] == 'Male') & (df['occupation'].isnull()), 'occupation'] = most_common_occupation_male
+df.loc[(df['sex'] == 'Female') & (df['occupation'].isnull()), 'occupation'] = most_common_occupation_female
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+# Filling NaN values of workclass according to corresponding education-num
+
+
+for education_level in df['education-num'].unique():
+    mode_workclass = df.loc[df['education-num'] == education_level, 'workclass'].mode()[0]
+    df.loc[(df['education-num'] == education_level) & (df['workclass'].isna()), 'workclass'] = mode_workclass
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+# Feature Engineering
+
+# Grouping workclass into four: private, government, self emp, without pay
+df['workclass-grouped'] = df['workclass'].apply(
+    lambda x: 'Private' if x == 'Private' else
+              'Government' if x in ['State-gov', 'Federal-gov', 'Local-gov'] else
+              'Self Emp' if x in ['Self-emp-not-inc', 'Self-emp-inc'] else
+              'Without Pay'
+)
+
+
+# Grouping marital-status into three: married, never-married, separated
+df['marital-status-grouped'] = df['marital-status'].apply(
+    lambda x: 'Married' if x in ['Married-civ-spouse', 'Married-spouse-absent', 'Married-AF-spouse']
+    else ('Never-married' if x == 'Never-married' else 'Separated')
+)
+
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+
+# Visualization for 'workclass-grouped'
+st.header("Feature Engineering: Workclass Grouped")
+fig1, ax1 = plt.subplots()
+df['workclass-grouped'].value_counts().plot.pie(autopct='%1.1f%%', ax=ax1)
+ax1.set_ylabel('')  # Removes the y-axis label for cleaner presentation
+st.pyplot(fig1)
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+# Visualization for 'marital-status-grouped'
+st.header("Feature Engineering: Marital-status Grouped")
+fig2, ax2 = plt.subplots()
+df['marital-status-grouped'].value_counts().plot.pie(autopct='%1.1f%%', ax=ax2)
+ax2.set_ylabel('')
+st.pyplot(fig2)
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+# Categorization for 'native-country'
+df['native-country'] = df['native-country'].apply(lambda x: x if x == 'United-States' else 'Others')
+
+## Visualization for 'native-country' categorization as a pie chart
+st.header("Feature Engineering: Native-country Grouped")
+fig3, ax3 = plt.subplots()
+df['native-country'].value_counts().plot.pie(autopct='%1.1f%%', ax=ax3)
+ax3.set_ylabel('')
+st.pyplot(fig3)
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+# Creating 'age_group'
+
+df['age_group'] = pd.cut(df['age'], bins=[0, 25, 45, 65, np.inf], labels=['Young', 'Adult', 'Middle-aged', 'Senior'])
+
+st.header("Feature Engineering: Age Grouped")
+fig4, ax4 = plt.subplots()
+df['age_group'].value_counts().plot.pie(autopct='%1.1f%%', ax=ax4)
+ax4.set_ylabel('')
+st.pyplot(fig4)
+
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+# Due to the ratio mentioned above, race is grouped into three
+df['race-grouped'] = df['race'].apply(lambda x: x if x in ['White', 'Black'] else 'Others')
+# Visualization for 'race-grouped' as a pie chart
+st.header("Feature Engineering: Race Grouped")
+fig5, ax5 = plt.subplots()
+df['race-grouped'].value_counts().plot.pie(autopct='%1.1f%%', ax=ax5)
+ax5.set_ylabel('')
+st.pyplot(fig5)
+
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+# Net capital
+df.loc[:, 'net_capital'] = df['capital-gain'] - df['capital-loss']
+st.header("Feature Engineering: Net Capital")
+df['net_capital'] = df['capital-gain'] - df['capital-loss']
+# Visualizing 'net_capital'
+# Since 'net_capital' is a continuous variable, a histogram is a good choice
+fig, ax = plt.subplots()
+sns.histplot(df['net_capital'], kde=True, ax=ax)
+ax.set_title("Distribution of Net Capital")
+st.pyplot(fig)
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+
+# Creating a formatted string for missing values
+missing_values_str = "\n" + 20 * "-" + "Missing Values".center(20) + 20 * "-" + "\n"
+missing_values_str += df.isnull().sum().to_string()
+
+# Displaying the formatted string with missing values in the Streamlit app
+st.text(missing_values_str)
+
+# Encoding and Scaling
+
+# Label encoding
+binary_cols = [col for col in df.columns if df[col].dtype not in [int, float] and df[col].nunique() == 2]
+for col in binary_cols:
+    label_encoder(df,col)
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+# One hot encoder
+ohe_cols = [col for col in df.columns if 20 >= df[col].nunique() > 2]
+one_hot_encoder(df, ohe_cols)
+ohe_cols = [col for col in df.columns if 20 >= df[col].nunique() > 2]
+df_1hot_encoded = one_hot_encoder(df, ohe_cols)
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+df = df_1hot_encoded
+
+# Scaling
+scaler = RobustScaler()
+df = pd.DataFrame(scaler.fit_transform(df), columns=df.columns)
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+
+st.title("CatBoost Model Evaluation")
+
+# Assuming df is your preprocessed DataFrame ready for modeling
+# Ensure 'income' is the target variable encoded correctly
+cat_columns = df.select_dtypes(include=['object', 'category']).columns
+# Handling possible interrupters for the models
+df.columns = df.columns.str.replace('[', '').str.replace(']', '').str.replace('<', '')
+
+# Train-test splitting section
+y = df["income"]
+X = df.drop(["income"], axis=1)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+
+# Assuming df, X_train, X_test, y_train, y_test are already defined and preprocessed
+
+# Best parameters as provided
+best_params = {
+    'depth': 6,
+    'l2_leaf_reg': 1,
+    'iterations': 200,
+    'learning_rate': 0.1
+}
+
+# Convert the dictionary to a formatted string
+best_params_md = '\n'.join([f"- **{key}**: {value}" for key, value in best_params.items()])
+
+st.markdown(f"""
+### Best Parameters (_calculated beforehand_)
+{best_params_md}
+
+
+""")
+
+
+
+# Initialize the CatBoost Classifier
+cb_model = CatBoostClassifier(verbose=0, random_seed=0)
+cb_model.fit(X_train, y_train)
+
+# Making predictions
+y_pred = cb_model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+st.write(f"Accuracy: {accuracy:.4f}")
+classification_rep = classification_report(y_test, y_pred)
+st.text(f"Classification Report:\n{classification_rep}")
+
+
+# Feature importance visualization
+feature_importances = pd.Series(cb_model.get_feature_importance(), index=X_train.columns)
+top10_feature_importances = feature_importances.nlargest(10)
+fig, ax = plt.subplots()
+top10_feature_importances.plot(kind='barh', ax=ax)
+ax.set_title('Top 10 Feature Importances with CatBoost')
+ax.set_xlabel('Feature Importance Score')
+ax.set_ylabel('Features')
+st.pyplot(fig)
+
+# Threshold adjustment section
+st.header("Adjust Classification Threshold")
+new_threshold = st.slider("Select New Threshold", min_value=0.0, max_value=1.0, value=0.42, step=0.01)
+probabilities = cb_model.predict_proba(X_test)
+positive_probabilities = probabilities[:, 1]
+custom_predictions = (positive_probabilities >= new_threshold).astype(int)
+
+# Displaying the results with the custom threshold
+custom_accuracy = accuracy_score(y_test, custom_predictions)
+st.write(f"Custom Threshold Accuracy: {custom_accuracy:.4f}")
+st.text(classification_report(y_test, custom_predictions))
+
+
+
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+
+
+# Assuming 'df' is your DataFrame after all preprocessing steps, ready for modeling
+# and 'income' is your target variable
+
+# Simulating the DataFrame preparation process
+# df = preprocess_your_data()
+
+# Splitting the data
+y = df['income']
+X = df.drop(['income'], axis=1)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+st.title("Random Forest Model Evaluation")
+
+# Displaying the best pre-calculated parameters
+best_params = {
+    'n_estimators': 200,
+    'max_depth': None,
+    'min_samples_split': 5,
+    'min_samples_leaf': 2
+}
+
+# Convert the dictionary to a formatted string
+best_paramss = '\n'.join([f"- **{key}**: {value}" for key, value in best_params.items()])
+
+st.markdown(f"""
+### Best Parameters (_calculated beforehand_)
+{best_paramss}
+
+
+""")
+
+
+# Train the Random Forest model with best parameters
+rf_model = RandomForestClassifier(**best_params, random_state=42)
+rf_model.fit(X_train, y_train)
+
+# Initial predictions and classification report
+y_pred = rf_model.predict(X_test)
+initial_accuracy = accuracy_score(y_test, y_pred)
+initial_report = classification_report(y_test, y_pred)
+
+st.write(f"Accuracy: {initial_accuracy:.4f}")
+st.markdown("Classification Report:")
+st.text(initial_report)
+
+# Feature importance visualization
+feature_importances = pd.Series(rf_model.feature_importances_, index=X_train.columns).nlargest(10)
+fig, ax = plt.subplots()
+feature_importances.plot(kind='barh', ax=ax)
+ax.set_title("Top 10 Feature Importances")
+ax.set_xlabel("Importance")
+st.pyplot(fig)
+
+# Adjust Classification Threshold
+st.header("Adjust Classification Threshold")
+new_threshold = st.slider("Select New Threshold", 0.0, 1.0, 0.42, 0.01, key=2)
+
+if st.button("Apply New Threshold"):
+    probabilities = rf_model.predict_proba(X_test)[:, 1]
+    custom_predictions = (probabilities >= new_threshold).astype(int)
+    custom_accuracy = accuracy_score(y_test, custom_predictions)
+    custom_report = classification_report(y_test, custom_predictions)
+
+    st.write(f"Custom Threshold ({new_threshold}) Accuracy: {custom_accuracy:.4f}")
+    st.markdown("### Classification Report After Threshold Adjustment:")
+    st.text(custom_report)
+
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+
+# Assuming df is your preprocessed DataFrame ready for modeling
+# Ensure 'income' is the target variable encoded correctly
+
+# Placeholder for df, replace with actual preprocessing steps
+# df = your_preprocessing_function()
+
+# Train-test splitting section
+y = df["income"]
+X = df.drop(["income"], axis=1)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+st.title('Logistic Regression Model Evaluation')
+# Best parameters for Logistic Regression as provided
+best_params_lr = {
+    'C': 10,
+    'penalty': 'l2', # Assuming 'l2' is the regularization you want
+    'solver': 'saga'
+    # 'solver': 'saga' is assumed to be compatible with 'l2'
+}
+# st.header('Best Parameters')
+# Displaying the best parameters
+best_params_lr_md = '\n'.join([f"- **{key}**: {value}" for key, value in best_params_lr.items()])
+st.markdown(f""" 
+### Best Parameters (_calculated beforehand_)
+{best_params_lr_md}
+
+
+""")
+
+# Data Scaling
+scaler = StandardScaler()
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+# Initialize the Logistic Regression Classifier with the best parameters
+lr_model = LogisticRegression(C=best_params_lr['C'], penalty=best_params_lr['penalty'], solver='saga', random_state=0)
+lr_model.fit(X_train_scaled, y_train)
+
+# Making predictions
+y_pred = lr_model.predict(X_test_scaled)
+accuracy = accuracy_score(y_test, y_pred)
+st.write(f"Accuracy: {accuracy:.4f}")
+classification_rep = classification_report(y_test, y_pred)
+st.text(f"Classification Report:\n{classification_rep}")
+st.text(classification_report(y_test, y_pred))
+
+# Since Logistic Regression does not have feature importances like CatBoost,
+# you might consider visualizing coefficients or skipping this part.
+# For demonstration, visualizing coefficients magnitude as importance
+coefficients = pd.Series(lr_model.coef_[0], index=X.columns)
+top10_coefficients = coefficients.abs().nlargest(10)
+fig, ax = plt.subplots()
+top10_coefficients.plot(kind='barh', ax=ax)
+ax.set_title('Top 10 Coefficients Magnitude for Logistic Regression')
+ax.set_xlabel('Coefficient Magnitude')
+ax.set_ylabel('Features')
+st.pyplot(fig)
+
+# Threshold adjustment section
+st.header("Adjust Classification Threshold")
+new_threshold = st.slider("Select New Threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.01)
+probabilities = lr_model.predict_proba(X_test_scaled)[:, 1]
+custom_predictions = (probabilities >= new_threshold).astype(int)
+
+# Displaying the results with the custom threshold
+custom_accuracy = accuracy_score(y_test, custom_predictions)
+st.write(f"Custom Threshold Accuracy: {custom_accuracy:.4f}")
+st.text(classification_report(y_test, custom_predictions))
+
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+
+# Convert to DMatrix (used by XGBoost)
+dtrain = xgb.DMatrix(X_train, label=y_train)
+dtest = xgb.DMatrix(X_test, label=y_test)
+
+# Defining the optimized model parameters (Replace with your optimized parameters)
+params = {
+    'objective': 'binary:logistic',
+    'max_depth': 3,
+    'learning_rate': 0.1,
+    'eval_metric': 'logloss',
+}
+num_boost_round = 100
+
+# Train the model
+bst = xgb.train(params, dtrain, num_boost_round, evals=[(dtest, 'test')], early_stopping_rounds=10)
+
+# Predicting on the test set
+y_pred_prob = bst.predict(dtest)
+y_pred = np.where(y_pred_prob > 0.5, 1, 0)
+
+# Accuracy and classification report before threshold adjustment
+accuracy = accuracy_score(y_test, y_pred)
+classification_rep = classification_report(y_test, y_pred)
+
+st.title("XGBoost Model Evaluation")
+# Displaying the best parameters
+best_params_lr_ma = '\n'.join([f"- **{key}**: {value}" for key, value in params.items()])
+st.markdown(f"""
+### Best Parameters (_calculated beforehand_)
+{best_params_lr_ma}
+
+
+""")
+st.write(f"Accuracy: {accuracy:.4f}")
+st.text(f"Classification Report:\n{classification_rep}")
+
+# Feature Importances
+def plot_feature_importances(bst):
+    importance = bst.get_score(importance_type='weight')
+    importance_df = pd.DataFrame({'Feature': importance.keys(), 'Importance': importance.values()})
+    importance_df = importance_df.sort_values('Importance', ascending=False).head(10)
+    fig, ax = plt.subplots()
+    ax.barh(importance_df['Feature'], importance_df['Importance'])
+    ax.set_xlabel('Importance')
+    ax.set_ylabel('Feature')
+    ax.set_title('Top 10 Feature Importances')
+    return fig
+
+st.pyplot(plot_feature_importances(bst))
+
+# Adjust Classification Threshold
+threshold = st.slider("Select New Threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.01, key=3)
+
+# New predictions based on the selected threshold
+new_predictions = np.where(y_pred_prob > threshold, 1, 0)
+new_accuracy = accuracy_score(y_test, new_predictions)
+new_classification_rep = classification_report(y_test, new_predictions)
+
+st.write(f"New Accuracy with Threshold {threshold}: {new_accuracy:.4f}")
+st.text(f"New Classification Report with Threshold {threshold}:\n{new_classification_rep}")
+
+
+st.text("")  # Adds an empty line.
+st.text("")  # Adds an empty line.
+
+# Assuming data is loaded into X_train, X_test, y_train, y_test
+
+# Creating LightGBM datasets
+dtrain = lgb.Dataset(X_train, label=y_train)
+dtest = lgb.Dataset(X_test, label=y_test, reference=dtrain)
+
+# Defining the model parameters
+params = {
+    'objective': 'binary',
+    'metric': 'binary_logloss',
+    'boosting': 'gbdt',
+    'num_leaves': 31,
+    'learning_rate': 0.05,
+    'verbose': 0
+}
+
+# Training the model
+num_round = 100
+bst = lgb.train(params, dtrain, num_round, valid_sets=[dtest])
+
+# Predicting on the test set
+y_pred_prob = bst.predict(X_test)
+y_pred = np.where(y_pred_prob > 0.5, 1, 0)
+
+# Calculating the accuracy and printing the classification report
+accuracy = accuracy_score(y_test, y_pred)
+classification_rep = classification_report(y_test, y_pred)
+
+st.title("LightGBM Model Evaluation")
+best_params_lr_mf = '\n'.join([f"- **{key}**: {value}" for key, value in params.items()])
+st.markdown(f"""
+### Best Parameters (_calculated beforehand_)
+{best_params_lr_mf}
+
+
+""")
+st.write(f"Accuracy: {accuracy:.4f}")
+st.text(f"Classification Report:\n{classification_rep}")
+
+# Top 10 Feature Importances
+fig, ax = plt.subplots(figsize=(10, 6))
+lgb.plot_importance(bst, max_num_features=10, importance_type='split', ax=ax)
+st.pyplot(fig)
+
+# Adjust Classification Threshold
+threshold = st.slider("Select New Threshold", min_value=0.0, max_value=1.0, value=0.5, step=0.01, key=5)
+
+new_predictions = np.where(y_pred_prob > threshold, 1, 0)
+new_accuracy = accuracy_score(y_test, new_predictions)
+new_classification_rep = classification_report(y_test, new_predictions)
+
+st.write(f"New Accuracy with Threshold {threshold}: {new_accuracy:.4f}")
+st.text(f"New Classification Report with Threshold {threshold}:\n{new_classification_rep}")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
