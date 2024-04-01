@@ -1,0 +1,282 @@
+import seaborn as sns
+import matplotlib
+matplotlib.use('QT5Agg')
+import joblib
+import warnings
+warnings.simplefilter(action='ignore', category=FutureWarning) # Suppress FutureWarnings
+import numpy as np
+import pandas as pd
+#from imblearn.pipeline import make_pipeline
+from matplotlib import pyplot as plt
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder, StandardScaler, RobustScaler
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
+import scipy.stats as stats
+from scipy.stats import chi2_contingency
+from sklearn.preprocessing import MinMaxScaler, LabelEncoder, StandardScaler, RobustScaler
+from sklearn.svm import SVC
+from catboost import CatBoostClassifier
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import accuracy_score, classification_report
+from sklearn.model_selection import GridSearchCV
+from sklearn.linear_model import LogisticRegression
+import lightgbm as lgb
+import xgboost as xgb
+from sklearn.naive_bayes import GaussianNB
+
+
+
+
+
+pd.set_option("display.max_columns", None)
+pd.set_option("display.max_rows", None)
+pd.set_option("display.float_format", lambda x: '%.3f' % x)
+pd.set_option("display.width", 500)
+
+def target_density_est_with_num(dataframe, target, numerical_col, positive_label=1, negative_label=0,
+                                positive_legend='Positive Class', negative_legend='Negative Class'):
+    """
+    Plot density estimates for a numerical column, separated by target class.
+
+    Parameters:
+    - dataframe: pandas DataFrame containing the data.
+    - target: String, the name of the target column.
+    - numerical_col: String, the name of the numerical column to plot.
+    - positive_label: The value in the target column that represents the positive class. Defaults to 1.
+    - negative_label: The value in the target column that represents the negative class. Defaults to 0.
+    - positive_legend: String, legend label for the positive class. Defaults to 'Positive Class'.
+    - negative_legend: String, legend label for the negative class. Defaults to 'Negative Class'.
+    """
+    plt.figure(figsize=(15, 8))
+    # Plot the density of the positive class
+    ax = sns.kdeplot(dataframe[numerical_col][dataframe[target] == positive_label], color="green", shade=True)
+    # Plot the density of the negative class
+    sns.kdeplot(dataframe[numerical_col][dataframe[target] == negative_label], color="red", shade=True)
+    plt.legend([positive_legend, negative_legend])
+    plt.title(f"Density of {numerical_col} by {target}")
+    plt.show(block=True)
+
+
+import seaborn as sns
+from matplotlib import pyplot as plt
+
+
+def target_density_est_with_num(dataframe, target, numerical_col, positive_label=1, negative_label=0,
+                                positive_legend='Positive Class', negative_legend='Negative Class'):
+    """
+    Plot density estimates for a numerical column, separated by target class.
+
+    Parameters:
+    - dataframe: pandas DataFrame containing the data.
+    - target: String, the name of the target column.
+    - numerical_col: String, the name of the numerical column to plot.
+    - positive_label: The value in the target column that represents the positive class. Defaults to 1.
+    - negative_label: The value in the target column that represents the negative class. Defaults to 0.
+    - positive_legend: String, legend label for the positive class. Defaults to 'Positive Class'.
+    - negative_legend: String, legend label for the negative class. Defaults to 'Negative Class'.
+    """
+    plt.figure(figsize=(15, 8))
+    # Plot the density of the positive class
+    ax = sns.kdeplot(dataframe[numerical_col][dataframe[target] == positive_label], color="green", shade=True)
+    # Plot the density of the negative class
+    sns.kdeplot(dataframe[numerical_col][dataframe[target] == negative_label], color="red", shade=True)
+    plt.legend([positive_legend, negative_legend])
+    plt.title(f"Density of {numerical_col} by {target}")
+    plt.show(block=True)
+
+
+def outlier_thresholds(dataframe, col_name, q1=0.25, q3=0.7):
+    quartile1 = dataframe[col_name].quantile(0.25)
+    quartile3 = dataframe[col_name].quantile(0.75)
+    interquantile_range = quartile3 - quartile1
+    up_limit = quartile3 + 1.5 * interquantile_range
+    low_limit = quartile1 - 1.5 * interquantile_range
+    return low_limit, up_limit
+def check_outlier(dataframe, col_name):  # percentile degistirmek isteseydik buraya parametre olarak eklemeliydik.
+    low_limit, up_limit = outlier_thresholds(dataframe, col_name)
+    if dataframe[(dataframe[col_name] > up_limit) | (dataframe[col_name] < low_limit)].any(axis=None):
+        return True
+    else:
+        return False
+def grab_col_names(dataframe, cat_th=10, car_th=20):  # 10 ve 20 sinirlari kisisel kararlardir.
+
+    # cat_cols, cat_but_car
+    cat_cols = [col for col in dataframe.columns if dataframe[col].dtypes == "O"]
+    num_but_cat = [col for col in dataframe.columns if dataframe[col].nunique() < cat_th and
+                   dataframe[col].dtypes != "O"]
+    cat_but_car = [col for col in dataframe.columns if dataframe[col].nunique() > cat_th and
+                   dataframe[col].dtypes == "O"]
+    cat_cols = cat_cols + num_but_cat
+    cat_cols = [col for col in cat_cols if col not in cat_but_car]
+
+    # numerical
+    num_cols = [col for col in dataframe.columns if dataframe[col].dtypes != "O"]
+    num_cols = [col for col in num_cols if col not in num_but_cat]
+
+    print(f"Observations: {dataframe.shape[0]}")
+    print(f"Variables: {dataframe.shape[1]}")
+    print(f"cat_cols: {len(cat_cols)}")
+    print(f"num_cols: {len(num_cols)}")
+    print(f"cat_but_car: {len(cat_but_car)}")
+    print(f"num_but_car: {len(num_but_cat)}")
+
+    return cat_cols, num_cols, cat_but_car
+def remove_outlier(dataframe, col_name):
+    low_limit, up_limit = outlier_thresholds(dataframe, col_name)
+    df_without_outliers = dataframe[~((dataframe[col_name] < low_limit) | (dataframe[col_name] > up_limit))]
+    return df_without_outliers
+def replace_with_thresholds(dataframe, variable):
+    low_limit, up_limit = outlier_thresholds(dataframe, variable)
+    dataframe.loc[(dataframe[variable] < low_limit), variable] = low_limit
+    dataframe.loc[(dataframe[variable] > up_limit), variable] = up_limit
+def label_encoder(dataframe, binary_col):
+    labelencoder = LabelEncoder()
+    dataframe[binary_col] = labelencoder.fit_transform(dataframe[binary_col])
+    return dataframe
+def one_hot_encoder(dataframe, categorical_cols, drop_first=True):
+    dataframe = pd.get_dummies(dataframe, columns=categorical_cols, drop_first=drop_first)
+    return dataframe
+def rare_analyser(dataframe, target, cat_cols):
+    for col in cat_cols:
+        print(col, ':', len(dataframe[col].value_counts()))
+        print(pd.DataFrame({"COUNT": dataframe[col].value_counts(),
+                            "RATIO": dataframe[col].value_counts() / len(dataframe),
+                            "TARGET_MEAN": dataframe.groupby(col)[target].mean()}), end="\n\n\n")
+def rare_encoder(dataframe, rare_perc):
+    temp_df = dataframe.copy()  # dataframemimizi kopyaladik ve temp_df'de yaptiklarimiz ana tabloyu etkilemeyecek.
+
+    rare_columns = [col for col in temp_df.columns if temp_df[col].dtypes == "O"
+                    and (temp_df[col].value_counts() / len(temp_df) < rare_perc).any(axis=None)]
+
+    for var in rare_columns:
+        tmp = temp_df[var].value_counts() / len(temp_df)
+        rare_labels = tmp[tmp < rare_perc].index
+        temp_df[var] = np.where(temp_df[var].isin(rare_labels), "Rare", temp_df[var])
+
+    return temp_df
+def check_data(dataframe,head=5):
+    print(20*"-" + "Information".center(20) + 20*"-")
+    print(dataframe.info())
+    print(20*"-" + "Data Shape".center(20) + 20*"-")
+    print(dataframe.shape)
+    print("\n" + 20*"-" + "The First 5 Data".center(20) + 20*"-")
+    print(dataframe.head())
+    print("\n" + 20 * "-" + "The Last 5 Data".center(20) + 20 * "-")
+    print(dataframe.tail())
+    print("\n" + 20 * "-" + "Missing Values".center(20) + 20 * "-")
+    print(dataframe.isnull().sum())
+    print("\n" + 40 * "-" + "Describe the Data".center(40) + 40 * "-")
+    print(dataframe.describe([0.01, 0.05, 0.10, 0.50, 0.75, 0.90, 0.95, 0.99]))
+def cat_summary(dataframe, col_name, plot=False):
+    print(pd.DataFrame({col_name: dataframe[col_name].value_counts(),
+                        "Ratio": 100 * dataframe[col_name].value_counts() / len(dataframe)}))
+    print("##########################################")
+    if plot:
+        sns.countplot(x=dataframe[col_name], data=dataframe)
+        plt.show(block=True)
+def num_summary(dataframe, numerical_col, plot=False):
+    quantiles = [0.05, 0.10, 0.20, 0.30, 0.40, 0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.99]
+    print(dataframe[numerical_col].describe(quantiles).T)
+    if plot:
+        dataframe[numerical_col].hist(bins=20)
+        plt.xlabel(numerical_col)
+        plt.ylabel(numerical_col)
+        plt.show(block=True)
+def correlation_matrix(df,cols):
+    fig = plt.gcf()
+    fig.set_size_inches(10, 8)
+    plt.xticks(fontsize=10)
+    plt.yticks(fontsize=10)
+    fig = sns.heatmap(df[cols].corr(), annot=True, linewidths=0.5, annot_kws={'size': 12}, linecolor='w', cmap='RdBu')
+    plt.show(block=True)
+def target_summary_with_num(dataframe,target, numerical_col):
+    print(dataframe.groupby(target).agg({numerical_col:"mean"}), end="\n\n")
+    print("###################################")
+def target_summary_with_cat(dataframe, target, categorical_col):
+    print(pd.DataFrame({'TARGET_MEAN': dataframe.groupby(categorical_col)[target].mean()}), end='\n\n\n')
+def plot_numerical_col(dataframe, numerical_col):
+    dataframe[numerical_col].hist(bins=20)
+    plt.xlabel(numerical_col)
+    plt.show(block=True)  # grafikler birbirini ezmesin diye block
+
+
+import pandas as pd
+from matplotlib import pyplot as plt
+import seaborn as sns
+
+
+def plot_importance(model, features, num=None, save=False):
+    """
+    Plot feature importances of a model.
+
+    Parameters:
+    - model: The trained model with attribute 'feature_importances_'.
+    - features: DataFrame or Series containing the feature names.
+    - num: Optional. Integer specifying the number of top features to plot. If None, plots all features.
+    - save: Boolean. If True, saves the plot to a file named 'importances.png'.
+    """
+    # Convert 'features' to a DataFrame if it's not already one
+    if not isinstance(features, pd.DataFrame):
+        features = pd.DataFrame(features)
+
+    feature_imp = pd.DataFrame({"Value": model.feature_importances_, "Feature": features.columns})
+
+    # If 'num' is not specified, plot all features
+    if num is None:
+        num = len(feature_imp)
+
+    plt.figure(figsize=(10, 10))
+    sns.set(font_scale=1)
+    sns.barplot(x="Value", y="Feature", data=feature_imp.sort_values(by="Value", ascending=False)[:num])
+
+    plt.title("Feature Importances")
+    plt.tight_layout()
+    plt.show()
+
+    if save:
+        plt.savefig("importances.png")
+
+
+def plot_numerical_columns_with_outliers(dataframe, num_cols):
+    # Set the size of the plot
+    plt.figure(figsize=(12, len(num_cols) * 4))
+
+    # Create a box plot for each numerical column
+    for index, col in enumerate(num_cols):
+        plt.subplot(len(num_cols), 1, index + 1)
+        sns.boxplot(x=dataframe[col])
+        plt.title(f'Box plot of {col}')
+
+    plt.tight_layout()
+    plt.show()
+
+
+def income_ratio_by_category(dataframe, cat_cols):
+    for col in cat_cols:
+        # Group by categorical column and 'income', then count occurrences
+        group_counts = dataframe.groupby([col, 'income']).size().reset_index(name='counts')
+
+        # Pivot the results for better readability
+        pivot_table = group_counts.pivot(index=col, columns='income', values='counts').fillna(0)
+
+        # Calculate ratios
+        pivot_table['>50K_ratio'] = (pivot_table['>50K'] / (pivot_table['>50K'] + pivot_table['<=50K'])) * 100
+        pivot_table['<=50K_ratio'] = (pivot_table['<=50K'] / (pivot_table['>50K'] + pivot_table['<=50K'])) * 100
+
+        # Display the results
+        print(f"Category: {col}")
+        print(pivot_table[['>50K_ratio', '<=50K_ratio']])
+        print("\n##########################################\n")
+
+
+def cramers_v(x, y):
+    contingency_table = pd.crosstab(x, y)
+    chi2, _, _, _ = chi2_contingency(contingency_table)
+    n = contingency_table.sum().sum()
+    phi2 = chi2 / n
+    r, k = contingency_table.shape
+    phi2corr = max(0, phi2 - ((k-1)*(r-1))/(n-1))
+    r_corr = r - ((r-1)**2)/(n-1)
+    k_corr = k - ((k-1)**2)/(n-1)
+    return np.sqrt(phi2corr / min((k_corr-1), (r_corr-1)))
