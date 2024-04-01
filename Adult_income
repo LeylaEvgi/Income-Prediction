@@ -1,0 +1,735 @@
+from keras import Input
+
+from myFunctions import *
+import myFunctions as mf
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Getting the dataset and investigating it
+
+# Correcting column names in the dataset
+column_names = [
+    "age", "workclass", "fnlwgt", "education", "education-num", "marital-status",
+    "occupation", "relationship", "race", "sex", "capital-gain", "capital-loss",
+    "hours-per-week", "native-country", "income"
+]
+
+
+# Converting .data extension to csv and then performing NaN labelling
+df = pd.read_csv("adult.data", names=column_names, na_values=" ?", skipinitialspace=True)
+df.replace('?', np.nan, inplace=True)
+
+
+# Previewing the dataset
+mf.check_data(df)
+'''
+32561 entries with 15 columns.
+Six int64 and 9 object variables.
+1836 missing values for workclass, 1843 for occupation and 583 for native-country.
+Capital-gaind and capital-loss have high std values.
+'''
+
+# Checking # of unique observations for each column to decide thresholds for categorical and numerical columns
+for col in df.columns:
+    print(f'{df[col].nunique()} for {col}.')
+
+
+# Since education and education-num has the same unique observation, taking a look at them
+df[['education', 'education-num']].head(50)
+# Education-num just corresponds the education level, basically they are the same
+df = df.drop('education', axis=1)
+
+
+# Defining categorical and numerical columns with decided thresholds
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Analyzing numerical columns
+
+# Descriptive statistics for numerical columns
+num_summary(df, num_cols)
+
+
+# Histograms in single image
+mf.plot_numerical_col(df,num_cols)
+'''
+fnlwgt and age have right-skewed distribution.
+capital-gain and capital-loss have very odd distribution, they are needed to be examined more.
+hours-per-week seems normally distributed.
+'''
+
+# Histograms for each
+for col in num_cols:
+    plt.figure(figsize=(8, 4))
+    sns.histplot(df[col], kde=True)
+    plt.title(f'Distribution of {col}')
+    plt.xlabel(col)
+    plt.ylabel('Frequency')
+    plt.show()
+
+# Pair plots, future warnings eliminated
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore", category=FutureWarning)
+    sns.pairplot(df[num_cols])
+    plt.show()
+
+
+# Correlation matrix
+corr = df[num_cols].corr()
+mask = np.triu(np.ones_like(corr, dtype=bool))
+plt.figure(figsize=(10, 8))
+sns.heatmap(corr, mask=mask, cmap='coolwarm', vmax=.3, center=0,
+            square=True, linewidths=.5, cbar_kws={"shrink": .5}, annot=True)
+plt.show()
+''''
+All the numerical variables are almost independent from each other.
+'''
+
+
+# Box plots for each
+for col in num_cols:
+    plt.figure(figsize=(8, 4))
+    sns.boxplot(x=df[col])
+    plt.title(f'Box Plot of {col}')
+    plt.xlabel(col)
+    plt.show()
+''''
+All the numerical variables have outliers within. 
+Age and hours-per-peek is going to be fixed.
+fnlwgt, capital-gain and capital-loss needs more specific handling.
+'''
+
+
+# Kernel density estimate(KDE) plots for each
+for col in num_cols:
+    plt.figure(figsize=(8, 4))
+    sns.kdeplot(data=df, x=col, hue="income", shade=True)
+    plt.title(f'Density Plot of {col} by Income')
+    plt.xlabel(col)
+    plt.ylabel('Density')
+    plt.show()
+'''
+To earn more than 50k, at least 35 hrs per week is needed, and it peaks at 40. Also, it is peaking at 40 for <50k.
+Being at age 40-50 has the highest probability for the income>50k.
+Since fnlwgt is a representative variable, it scales as the ratio of earning lower than 50k or not.
+'''
+
+# Quantile-Quantile(Q-Q) plots for each
+for col in num_cols:
+    plt.figure(figsize=(8, 4))
+    stats.probplot(df[col].dropna(), dist="norm", plot=plt)
+    plt.title(f'Q-Q Plot of {col}')
+    plt.show()
+
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Analyzing categorical columns
+
+# Bar plots for each categorical column. Additionally, unique value count and ratio within each categorical variable
+for col in cat_cols:
+    cat_summary(df, col, plot=True)
+    print("\n")
+''''
+~70% of workclass is 'Private'. 
+Marital status can be grouped into two as 'Married' and 'Not Married'.
+~85% of race is 'White' while ~10% is 'Black'.
+Male/Female ratio is 2/1.
+<=50k/>50k ratio is 3/1.
+In education number, first three is 9, 10, and 13.
+'''
+
+
+# Income ratio for each unique value of each categorical variable
+income_ratio_by_category(df, cat_cols)
+''''
+For workclass, just self-emp-inc has higher ratio in >50k income.
+For marital status, married couples are more likely to earn more than 50k.
+For occupation, prof-speciality and exec-mangerial's are more likely to earn more than 50k.
+As mentioned, married couples tend to earn more, and thus husbands and wifes are rather to earn more.
+For race, nothing is special.
+For sex, females are very unlikely to earn more than 50k with 10% while the percentage for males is 30%.
+'''
+
+# Stacked bar plots to visualize the step above
+for col in cat_cols:
+    pd.crosstab(df[col], df['income']).plot(kind='bar', stacked=True, figsize=(10, 5))
+    plt.title(f'{col} by Income')
+    plt.xlabel(col)
+    plt.ylabel('Frequency')
+    plt.show()
+
+
+
+# Observing correlation between categorical variables with Cramer's
+cat_columns = df.select_dtypes(include=['object', 'category']).columns
+cramers_v_matrix = pd.DataFrame(np.zeros((len(cat_columns), len(cat_columns))), index=cat_columns, columns=cat_columns)
+for col1 in cat_columns:
+    for col2 in cat_columns:
+        cramers_v_matrix.loc[col1, col2] = cramers_v(df[col1], df[col2])
+plt.figure(figsize=(10, 8))
+sns.heatmap(cramers_v_matrix, annot=True, fmt=".2f", cmap="coolwarm")
+plt.title("Cramér's V Matrix of Categorical Variables")
+plt.show()
+''''
+Most striking correlation is sex-relationship with 65%.
+Around 45% correlations:
+Marital-status --> sex and income.
+Relationship --> income.
+Race --> native-country.
+Sex --> occupation
+Finally, occupation and income has 35%.
+'''
+
+
+# Calculating significance of each categorical variable to the target 'income'
+for col in cat_cols:
+    table = pd.crosstab(df[col], df['income'])
+    chi2, p, dof, expected = chi2_contingency(table)
+    print(f'{col} p-value: {p}')
+''''
+All seems to heavily affect the outcome.
+'''
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Handling outliers of 'age'
+
+# Calculating the number of outliers for 'age' variable
+Q1 = df['age'].quantile(0.25)
+Q3 = df['age'].quantile(0.75)
+IQR = Q3 - Q1
+lower_bound = Q1 - 1.5 * IQR
+upper_bound = Q3 + 1.5 * IQR
+outliers = df[(df['age'] < lower_bound) | (df['age'] > upper_bound)]
+number_of_outliers = outliers.shape[0]
+print(f"Number of outliers in 'age': {number_of_outliers}")
+print(f"Outliers range: below {lower_bound} and above {upper_bound}")
+
+# Replacing them with threshold due to low in number and having no crucial effect
+replace_with_thresholds(df, 'age')
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Handling outliers of hours-per-week
+
+# Calculate Q1, Q3, and IQR and so the bounds
+Q1 = df['hours-per-week'].quantile(0.25)
+Q3 = df['hours-per-week'].quantile(0.75)
+IQR = Q3 - Q1
+
+lower_bound = Q1 - 1.5 * IQR
+upper_bound = Q3 + 1.5 * IQR
+
+
+# Segmenting the variable
+df['hours_segment'] = pd.cut(df['hours-per-week'],
+                             bins=[-np.inf, lower_bound, upper_bound, np.inf],
+                             labels=['Lower than Min Threshold', 'Between Thresholds', 'Higher than Max Threshold'])
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Handling outliers of capital-gain and capital-loss
+
+# Converting them into binary within and so outliers are also eliminated
+df['has_capital_gain'] = (df['capital-gain'] > 0).astype(int)
+df['has_capital_loss'] = (df['capital-loss'] > 0).astype(int)
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Eliminating fnlwgt
+
+# Since fnlwgt has no importance and affect the models badly, it is dropped.
+df = df.drop('fnlwgt', axis=1)
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Filling native-country as US if race is white
+
+# Checking the number of 'White' people having 'United-States' as their native country
+white_us = df[(df['race'] == 'White') & (df['native-country'] == 'United-States')]
+print(f'Number of individuals who are White and from United-States: {white_us.shape[0]}')
+
+
+# Filtering for rows where 'native-country' is NaN and 'race' is 'White'
+nan_native_country_white = df[(df['native-country'].isnull()) & (df['race'] == 'White')]
+print(f'Number of individuals who are White and have NaN in the native-country column: {nan_native_country_white.shape[0]}')
+
+
+# Filling NaN values in 'native-country' with 'United-States'
+df['native-country'] = df['native-country'].fillna('United-States')
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Filling occupation with its mode based on male and female
+
+most_common_occupation_male = df[df['sex'] == 'Male']['occupation'].mode()[0]
+most_common_occupation_female = df[df['sex'] == 'Female']['occupation'].mode()[0]
+
+
+# Fill NaN values in 'occupation' based on 'sex'
+df.loc[(df['sex'] == 'Male') & (df['occupation'].isnull()), 'occupation'] = most_common_occupation_male
+df.loc[(df['sex'] == 'Female') & (df['occupation'].isnull()), 'occupation'] = most_common_occupation_female
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+# Filling NaN values of workclass according to corresponding education-num
+
+
+for education_level in df['education-num'].unique():
+    mode_workclass = df.loc[df['education-num'] == education_level, 'workclass'].mode()[0]
+    df.loc[(df['education-num'] == education_level) & (df['workclass'].isna()), 'workclass'] = mode_workclass
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Feature Engineering
+
+# Grouping workclass into four: private, government, self emp, without pay
+df['workclass-grouped'] = df['workclass'].apply(
+    lambda x: 'Private' if x == 'Private' else
+              'Government' if x in ['State-gov', 'Federal-gov', 'Local-gov'] else
+              'Self Emp' if x in ['Self-emp-not-inc', 'Self-emp-inc'] else
+              'Without Pay'
+)
+
+
+# Grouping marital-status into three: married, never-married, separated
+df['marital-status-grouped'] = df['marital-status'].apply(
+    lambda x: 'Married' if x in ['Married-civ-spouse', 'Married-spouse-absent', 'Married-AF-spouse']
+    else ('Never-married' if x == 'Never-married' else 'Separated')
+)
+
+
+# Since almost 90% of native-country is US, it is categorized into two
+df['native-country'] = df['native-country'].apply(lambda x: x if x == 'United-States' else 'Others')
+
+
+df.loc[:, 'age_group'] = pd.cut(df['age'], bins=[0, 25, 45, 65, np.inf], labels=['Young', 'Adult', 'Middle-aged', 'Senior'])
+
+
+# Net capital
+df.loc[:, 'net_capital'] = df['capital-gain'] - df['capital-loss']
+
+
+# Due to the ratio mentioned above, race is grouped into three
+df['race-grouped'] = df['race'].apply(lambda x: x if x in ['White', 'Black'] else 'Others')
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Encoding and Scaling
+
+# Label encoding
+binary_cols = [col for col in df.columns if df[col].dtype not in [int, float] and df[col].nunique() == 2]
+for col in binary_cols:
+    label_encoder(df,col)
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+# One hot encoder
+ohe_cols = [col for col in df.columns if 20 >= df[col].nunique() > 2]
+one_hot_encoder(df, ohe_cols)
+ohe_cols = [col for col in df.columns if 20 >= df[col].nunique() > 2]
+df_1hot_encoded = one_hot_encoder(df, ohe_cols)
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+df = df_1hot_encoded
+
+
+# Scaling
+scaler = RobustScaler()
+df = pd.DataFrame(scaler.fit_transform(df), columns=df.columns)
+
+
+cat_cols, num_cols, cat_but_car = grab_col_names(df, 20,30)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Models
+
+# Handling with possible interrupters for the models
+cat_columns = df.select_dtypes(include=['object', 'category']).columns
+df.columns = df.columns.str.replace('[', '').str.replace(']', '').str.replace('<', '')
+
+
+# Train-test splitting
+y = df["income"]
+X = df.drop(["income"], axis=1)
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=0)
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Random forest model
+
+# Initializing the Random Forest classifier and fitting the model on the training data
+rf_model = RandomForestClassifier(random_state=0)
+rf_model.fit(X_train, y_train)
+
+
+# Making predictions on the test set
+y_pred = rf_model.predict(X_test)
+
+
+# Calculating the accuracy and also printing a classification report
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Accuracy: {accuracy:.4f}") # 0.8497
+print(classification_report(y_test, y_pred))
+# for 0 --> Precision: 0.88 and Recall: 0.92 and f1-score 0.90
+# for 1 --> Precision: 0.72 and Recall: 0.62 and f1-score: 0.67
+
+
+# Defining the parameter grid
+param_grid = {
+    'n_estimators': [100, 200],  # Number of trees
+    'max_depth': [10, 20, None],  # Maximum depth of trees
+    'min_samples_split': [2, 5],  # Minimum number of samples required to split an internal node
+    'min_samples_leaf': [1, 2]  # Minimum number of samples required to be at a leaf node
+}
+
+
+# Initializing the GridSearchCV object to find best parameters
+grid_search = GridSearchCV(estimator=RandomForestClassifier(random_state=0), param_grid=param_grid, cv=5, n_jobs=-1, verbose=2, scoring='accuracy')
+grid_search.fit(X_train, y_train)
+print("Best parameters found: ", grid_search.best_params_)
+# Best parameters found:  {'max_depth': None, 'min_samples_leaf': 2, 'min_samples_split': 5, 'n_estimators': 200}
+
+# Best model and predictions
+best_rf_model = grid_search.best_estimator_
+y_pred_optimized = best_rf_model.predict(X_test)
+
+
+# Calculating the accuracy and also printing a classification report
+accuracy_optimized = accuracy_score(y_test, y_pred_optimized)
+print(f"Optimized Accuracy: {accuracy_optimized:.4f}") # 0.8614
+print(classification_report(y_test, y_pred_optimized))
+# for 0 --> Precision: 0.88 and Recall: 0.94 and f1-score 0.91
+# for 1 --> Precision: 0.77 and Recall: 0.62 and f1-score: 0.69
+
+
+# Changing the threshold
+probabilities = best_rf_model.predict_proba(X_test)
+positive_probabilities = probabilities[:, 1]
+new_threshold = 0.42 # most balanced after experiencing
+
+
+# Applying the new threshold to determine class predictions
+custom_predictions = (positive_probabilities >= new_threshold).astype(int)
+
+
+# Getting the results
+custom_accuracy = accuracy_score(y_test, custom_predictions)
+print(f"Custom Threshold Accuracy: {custom_accuracy:.4f}") # 0.8583
+print(classification_report(y_test, custom_predictions))
+# for 0 --> Precision: 0.90 and Recall: 0.91 and f1-score 0.91
+# for 1 --> Precision: 0.72 and Recall: 0.70 and f1-score: 0.71
+
+
+# Getting top 10 feature importances and visualizing them
+feature_importances = pd.Series(best_rf_model.feature_importances_, index=X_train.columns)
+top10_feature_importances = feature_importances.nlargest(10)
+top10_feature_importances.plot(kind='barh')
+plt.title('Top 10 Feature Importances')
+plt.xlabel('Feature Importance Score')
+plt.ylabel('Features')
+plt.show()
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# CatBoost
+
+# Initializing the CatBoost classifier and fitting the model on the training data
+cb_model = CatBoostClassifier(verbose=0, random_seed=0)
+cb_model.fit(X_train, y_train)
+
+
+# Making predictions on the test set
+y_pred = cb_model.predict(X_test)
+
+
+# Calculating the accuracy and also printing a classification report
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Accuracy: {accuracy:.4f}") # 0.8678
+print(classification_report(y_test, y_pred))
+# for 0 --> Precision: 0.89 and Recall: 0.94 and f1-score 0.91
+# for 1 --> Precision: 0.77 and Recall: 0.66 and f1-score: 0.71
+
+# Defining the parameter grid
+param_grid = {
+    'iterations': [100, 200],
+    'learning_rate': [0.1, 0.01],
+    'depth': [4, 6, 10],
+    'l2_leaf_reg': [1, 3, 5]
+}
+
+
+# Performing grid search
+cb_model2 = CatBoostClassifier(verbose=0, random_seed=0)
+results = cb_model2.grid_search(param_grid, X_train, y_train, cv=5, partition_random_seed=0, stratified=True, verbose=False)
+print("Best parameters found: ", results['params'])
+
+
+
+# Calculating the accuracy and also printing a classification report
+y_pred_optimized = cb_model2.predict(X_test)
+accuracy_optimized = accuracy_score(y_test, y_pred_optimized)
+print(f"Optimized Accuracy: {accuracy_optimized:.4f}") # 0.8678
+print(classification_report(y_test, y_pred_optimized))
+# for 0 --> Precision: 0.89 and Recall: 0.94 and f1-score 0.91
+# for 1 --> Precision: 0.78 and Recall: 0.65 and f1-score: 0.71
+
+
+# Getting top 10 feature importances and visualizing them
+feature_importances = pd.Series(cb_model.get_feature_importance(), index=X_train.columns)
+top10_feature_importances = feature_importances.nlargest(10)
+top10_feature_importances.plot(kind='barh')
+plt.title('Top 10 Feature Importances with CatBoost')
+plt.xlabel('Feature Importance Score')
+plt.ylabel('Features')
+plt.show()
+
+
+# Changing the threshold
+probabilities = cb_model2.predict_proba(X_test)
+positive_probabilities = probabilities[:, 1]
+new_threshold = 0.42 # most balanced after experiencing
+
+
+# Applying the new threshold to determine class predictions
+custom_predictions = (positive_probabilities >= new_threshold).astype(int)
+
+
+# Getting the results
+custom_accuracy = accuracy_score(y_test, custom_predictions)
+print(f"Custom Threshold Accuracy: {custom_accuracy:.4f}") # 0.8657
+print(classification_report(y_test, custom_predictions))
+# for 0 --> Precision: 0.91 and Recall: 0.91 and f1-score 0.91
+# for 1 --> Precision: 0.73 and Recall: 0.72 and f1-score: 0.72
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# Logistic Regression
+
+# Fitting on training data and transforming both training and test data
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+
+# Initializing the Logistic Regression classifier
+log_reg = LogisticRegression(random_state=0)
+
+
+# Fitting the model on the scaled training data
+log_reg.fit(X_train_scaled, y_train)
+
+
+# Predicting on the scaled test set
+y_pred = log_reg.predict(X_test_scaled)
+
+# Calculating the accuracy and printing the classification report
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Accuracy: {accuracy:.4f}") # 0.8518
+print(classification_report(y_test, y_pred))
+# for 0 --> Precision: 0.88 and Recall: 0.93 and f1-score 0.90
+# for 1 --> Precision: 0.73 and Recall: 0.62 and f1-score: 0.67
+
+
+# Predict probabilities for the positive class
+probabilities = log_reg.predict_proba(X_test_scaled)[:, 1]
+
+
+# Defining a new threshold
+new_threshold = 0.43
+
+
+# Generating custom predictions based on the new threshold
+custom_predictions = (probabilities >= new_threshold).astype(int)
+
+
+# Evaluating custom predictions
+custom_accuracy = accuracy_score(y_test, custom_predictions)
+print(f"Custom Threshold Accuracy: {custom_accuracy:.4f}") # 0.8494
+print(classification_report(y_test, custom_predictions))
+# for 0 --> Precision: 0.90 and Recall: 0.90 and f1-score 0.90
+# for 1 --> Precision: 0.70 and Recall: 0.69 and f1-score: 0.69
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# LightGBM
+
+
+# Creating LightGBM datasets
+dtrain = lgb.Dataset(X_train, label=y_train)
+dtest = lgb.Dataset(X_test, label=y_test, reference=dtrain)
+
+
+# Defining the model parameters
+params = {
+    'objective': 'binary',  # Specify binary classification
+    'metric': 'binary_logloss',  # Evaluation metric
+    'boosting': 'gbdt',  # Gradient Boosting Decision Tree
+    'num_leaves': 31,  # Number of leaves in one tree
+    'learning_rate': 0.05,  # Learning rate
+    'verbose': 0  # Info output -1=silent
+}
+
+# Training the model
+num_round = 100  # Number of boosting rounds
+bst = lgb.train(params, dtrain, num_round, valid_sets=[dtest])
+
+
+# Predicting on the test set
+y_pred_prob = bst.predict(X_test)
+y_pred = [1 if x > 0.5 else 0 for x in y_pred_prob]  # Convert probabilities to binary output
+
+
+# Calculating the accuracy and printing the classification report
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Accuracy: {accuracy:.4f}")
+print(classification_report(y_test, y_pred))
+
+# Top10 feature importances
+lgb.plot_importance(bst, max_num_features=10, importance_type='split')
+plt.title("Feature Importance")
+plt.show()
+
+# Defining a new threshold
+new_threshold = 0.6  # Adjust based on your specific needs
+
+
+# Generating custom predictions based on the new threshold
+custom_predictions = [1 if x > new_threshold else 0 for x in y_pred_prob]
+
+
+# Evaluating custom predictions
+custom_accuracy = accuracy_score(y_test, custom_predictions)
+print(f"Custom Threshold Accuracy: {custom_accuracy:.4f}")
+print(classification_report(y_test, custom_predictions))
+
+
+
+
+
+
+'''-------------------------------------------------------------------------------------------------------'''
+
+
+# XGBoost
+
+# Creating DMatrix for train and test
+dtrain = xgb.DMatrix(X_train, label=y_train)
+dtest = xgb.DMatrix(X_test, label=y_test)
+
+
+# Defining the model parameters
+params = {
+    'objective': 'binary:logistic',
+    'max_depth': 3,
+    'learning_rate': 0.1,
+    'eval_metric': 'logloss',
+}
+
+
+# Number of training iterations
+num_boost_round = 100
+
+
+# Training the model
+bst = xgb.train(params, dtrain, num_boost_round, evals=[(dtest, 'test')], early_stopping_rounds=10)
+
+
+# Predicting on the test set
+y_pred_prob = bst.predict(dtest)
+y_pred = [1 if x > 0.5 else 0 for x in y_pred_prob]
+
+
+# Calculating the accuracy and printing the classification report
+accuracy = accuracy_score(y_test, y_pred)
+print(f"Accuracy: {accuracy:.4f}") # 0.8607
+print(classification_report(y_test, y_pred))
+# for 0 --> Precision: 0.88 and Recall: 0.95 and f1-score 0.91
+# for 1 --> Precision: 0.79 and Recall: 0.58 and f1-score: 0.67
+
+
+# Defining a new threshold
+new_threshold = 0.37
+
+
+# Applying the new threshold
+custom_predictions = [1 if x > new_threshold else 0 for x in y_pred_prob]
+
+
+# Evaluating the predictions with the custom threshold
+custom_accuracy = accuracy_score(y_test, custom_predictions)
+print(f"Custom Threshold Accuracy: {custom_accuracy:.4f}") # 0.8583
+print(classification_report(y_test, custom_predictions))
+# for 0 --> Precision: 0.90 and Recall: 0.91 and f1-score 0.91
+# for 1 --> Precision: 0.71 and Recall: 0.70 and f1-score: 0.71
+
+
+# Feature Importances
+xgb.plot_importance(bst)
+plt.title('Feature Importance')
+plt.show()
